@@ -42,7 +42,6 @@ thread_t * curr ;
 
                       Add internal helper functions here.
 ********************************************************************************/
-int scheduler();
 
 int timer_signal(int timer_type){
 
