@@ -34,9 +34,10 @@ typedef struct thread_queue {
 	int thread_n ;
 } thread_queue ;
 
-int tid_s ;
+int tid_s;
 struct thread_queue * t_queue; 
-thread_t * curr ;
+thread_t * sched;
+thread_t * curr;
 /*******************************************************************************
                              Auxiliary functions
 
@@ -111,7 +112,6 @@ void init_context(ucontext_t * ctx, ucontext_t * next){
 	ctx->uc_stack.ss_size = STACK_SIZE;
 	ctx->uc_stack.ss_flags = 0;
 
-	set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
 }
 
 void init_context_0 (ucontext_t * ctx, void (* func)(), ucontext_t * next) {
@@ -174,43 +174,42 @@ int delete_t_queue(tid_t term_tid){
 }
 
 
-int scheduler(){
+void scheduler(){
 
-	if( curr == 0x0 ){
-		perror("scheduler");
-		return -1;
-	}
-
-
-	thread_t * prev = curr;
-	thread_t * i = curr->next;
-	for( ; i != 0x0 ; i = i->next ){
-		if(i->state != ready)
-			continue;
-		curr = i;
-		curr->state = running;	
-		set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
-		if( swapcontext(&prev->ctx,&curr->ctx) < 0 ){
-			perror("swapcontext");
-			exit(EXIT_FAILURE);
+	
+	while(1){
+		
+		thread_t * i = curr->next;
+		for( ; i != 0x0 ; i = i->next ){
+			if(i->state != ready)
+				continue;
+			curr = i;
+			curr->state = running;	
+			set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
+			sched->state = ready;
+			puts(" swapcontext(&sched->ctx,&curr->ctx) in sched before\n");
+			if( swapcontext(&sched->ctx,&curr->ctx) < 0 ){
+				perror("swapcontext");
+				exit(EXIT_FAILURE);
+			}
+			return ;
 		}
-		return 0;
-	}
 
-	for( i = t_queue->first_t ; i != curr->next ; i = i->next ){
-		if(i->state != ready)
-			continue;
-		curr = i;
-		curr->state = running;
-		set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
-		if( swapcontext(&prev->ctx,&curr->ctx) < 0 ){
-			perror("swapcontext");
-			exit(EXIT_FAILURE);
+		for( i = t_queue->first_t ; i != curr->next ; i = i->next ){
+			if(i->state != ready)
+				continue;
+			curr = i;
+			curr->state = running;
+			set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
+			sched->state = ready;
+			puts(" swapcontext(&sched->ctx,&curr->ctx) in sched after\n");
+			if( swapcontext(&sched->ctx,&curr->ctx) < 0 ){
+				perror("swapcontext");
+				exit(EXIT_FAILURE);
+			}
+			return;
 		}
-		return 0;
 	}
-
-	return 0;
 
 }
 
@@ -230,9 +229,16 @@ int init(){
 	t_queue->thread_n = 0;
 	
 	tid_s = 0;
+
+	sched = (thread_t *) malloc (sizeof(thread_t));
+	sched->state = ready;
+	init_context_0(&sched->ctx, scheduler, 0);
+	sched->next = 0x0;
+	sched->tid = tid_s++;
+	
 	curr = (thread_t *) malloc (sizeof(thread_t));
 	curr->state = running;
-	getcontext(&curr->ctx);
+	init_context_0(&curr->ctx, 0x0, 0);
 	curr->next = 0x0;
      	curr->tid = tid_s++;
 
@@ -241,11 +247,12 @@ int init(){
 		return -1;
 	}
 
+	set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
 	return curr->tid;
 }
 
 
-tid_t spawn(void (*start)()){
+tid_t spawn(void (* start)()){
 
 	thread_t * new = (thread_t *) malloc ( sizeof(thread_t) );
 	new->state = ready;
@@ -269,7 +276,9 @@ void yield(){
 		exit(EXIT_FAILURE);
 	}
 	curr->state = ready;
-	scheduler();
+	sched->state = running;
+	puts("swapcontext(&curr->ctx, &sched->ctx); in yield\n");
+	swapcontext(&curr->ctx, &sched->ctx);
 		
 }
 
@@ -288,7 +297,9 @@ void done(){
 			i->state = ready;
 		}
 	}
-	scheduler();
+	sched->state = running;
+	puts("swapcontext(&curr->ctx, &sched->ctx); in done\n");
+	swapcontext(&curr->ctx, &sched->ctx);
 }
 
 
@@ -301,7 +312,9 @@ tid_t join() {
 	}
 
 	curr->state = waiting;
-	scheduler();
+	sched->state = ready;
+	puts("swapcontext(&curr->ctx, &sched->ctx); in join\n");
+	swapcontext(&curr->ctx, &sched->ctx);
 
 	thread_t * i = t_queue->first_t;
 	for( ; i != 0x0 ; i = i->next ){
