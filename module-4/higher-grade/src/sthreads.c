@@ -120,11 +120,6 @@ void init_context_0 (ucontext_t * ctx, void (* func)(), ucontext_t * next) {
 	makecontext(ctx, func, 0);
 }
 
-void init_context_1 (ucontext_t * ctx, void (* func)(), const char * str, ucontext_t * next){
-	init_context(ctx, next);
-	makecontext(ctx, func, 1, str);
-}
-
 int insert_t_queue(thread_t * new){
 
 	if( t_queue->first_t == 0x0 ){
