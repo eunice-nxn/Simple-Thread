@@ -13,6 +13,40 @@ int flag = 0;
 
 /* Prints the sequence 0, 1, 2, .... INT_MAX over and over again.
  */
+int cnt = 0;
+lock lk1 ;
+lock lk2 ;
+
+void inc (){
+
+	sthreads_lock(&lk1);
+	puts("inc()");
+	while(cnt < 100000){
+		cnt += 100;
+	}
+	sthreads_unlock(&lk1);
+	int k = 5;
+	while(k++ < 100)
+		//puts("inc unlocked\n");
+	done();	
+
+	 
+}
+
+void dec (){
+
+	sthreads_lock(&lk1);
+	puts("dec()");
+	while(cnt > 0){
+		cnt -= 100;
+	}
+	sthreads_unlock(&lk1);
+	int k = 50;
+	while(k++ < 100)
+		//puts("dec unlocked\n");
+	done();
+
+}
 void numbers() {
 	int n = 0;
 	while (true) {
@@ -28,8 +62,9 @@ void letters() {
 	char c = 'a';
 	while (true) {
 		printf(" c = %c\n", c);
-		if (c == 'f' && flag == 0 ) done();
+		if (c == 'f' && flag == 0) done();
 		c = (c == 'z') ? 'a' : c + 1;
+
 	}
 }
 
@@ -136,7 +171,6 @@ void magic_numbers() {
             Here you should add code to test the Simple Threads API.
 ********************************************************************************/
 
-
 int main(int argc, char * argv[] ){
 	if( argc < 2 ) {
 		perror("few arguments\n");
@@ -169,7 +203,6 @@ int main(int argc, char * argv[] ){
 				magic_id = -1;
 			}
 			if ( fib_fast_id == -1 && numbers_id == -1 && letters_id == -1 && magic_id == -1 ){
-				done();
 				break;
 			}
 		}
@@ -183,10 +216,28 @@ int main(int argc, char * argv[] ){
 		spawn(numbers);
 		spawn(letters);
 		spawn(fibonacci_fast);
-		while(1){
-			puts("main\n");
-		}
+		while(1) ;
 		return 0;
 	}
+
+	if(strcmp(argv[1], "lock_test_first") == 0){
+		lock_init(&lk1);
+		for(int i = 0 ; i < 10 ; i++)
+			spawn(inc);
+		while(1) ;
+	}
+
+	if(strcmp(argv[1], "lock_test_deadlock") == 0){
+		lock_init(&lk1);
+		lock_init(&lk2);
+		for(int i = 0 ; i < 10 ; i++){
+			if( i % 2 == 0 )
+				spawn(inc);
+			else 
+				spawn(dec);
+		}
+		while(1) ; 
+	}
+
 
 }
