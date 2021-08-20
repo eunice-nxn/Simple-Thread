@@ -23,7 +23,6 @@
 #define STACK_SIZE SIGSTKSZ*100
 #define TIMEOUT 10
 #define DISABLE 0
-#define RESTORE (int) curr->stopped_time.it_value.tv_usec / 1000
 #define TIMER_TYPE ITIMER_REAL
 /*******************************************************************************
                              Global data structures
@@ -77,11 +76,9 @@ int sthreads_lock (lock * lk){
 
 	set_timer(TIMER_TYPE, timer_handler, DISABLE, &curr->stopped_time);
 	if( lk->hold != 0 ){
-			// 기다릴 때는 waiting
 			curr->lock_wait = lk->lid;
 			curr->state = waiting;
 			return 0;
-			// 내 차례가 왔을 때 ready
 	}
 	int restore = (int) curr->stopped_time.it_value.tv_usec / 1000;
 	set_timer(TIMER_TYPE, timer_handler, restore, 0x0);
@@ -147,7 +144,8 @@ void set_timer (int type, void (* handler) (int), int ms, struct itimerval * old
 void timer_handler (int signum){
 	//static int count = 0;
 	//fprintf(stderr, "=======> timer( %03d ) curr_tid : %d\n", count++, curr->tid);
-	yield();
+	if( signum == SIGALRM )
+		yield();
 }
 
 void init_context(ucontext_t * ctx, ucontext_t * next){
