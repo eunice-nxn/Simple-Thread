@@ -21,8 +21,9 @@
 #include <string.h>
 /* Stack size for each context. */
 #define STACK_SIZE SIGSTKSZ*100
-#define TIMEOUT 500
+#define TIMEOUT 10
 #define DISABLE 0
+#define RESTORE (int) curr->stopped_time.it_value.tv_usec / 1000
 #define TIMER_TYPE ITIMER_REAL
 /*******************************************************************************
                              Global data structures
@@ -35,14 +36,70 @@ typedef struct thread_queue {
 } thread_queue ;
 
 int tid_s;
-struct thread_queue * t_queue; 
+thread_queue * t_queue; 
 thread_t * sched;
 thread_t * curr;
+thread_t * curr_for_lock;
+
+lid_t lid_s;
 /*******************************************************************************
                              Auxiliary functions
 
                       Add internal helper functions here.
 ********************************************************************************/
+void update_lock_wait_q(lid_t lid){
+
+	thread_t * i = curr_for_lock->next;
+	for ( ; i != NULL ; i = i->next ){
+		if( i->lock_wait == lid && i->state == waiting ){
+			i->state = ready;
+			return ;
+		}
+	}
+
+}
+int sthreads_unlock (lock * lk){
+
+	set_timer(TIMER_TYPE, timer_handler, DISABLE, &curr->stopped_time);
+	if( lk->hold != 1 || lk->tid == -1 ){
+		perror("sthread_unlock : already unlocked");
+		exit(EXIT_FAILURE);
+	}
+	update_lock_wait_q(lk->lid);
+	int restore = (int) curr->stopped_time.it_value.tv_usec / 1000;
+	set_timer(TIMER_TYPE, timer_handler, restore, 0x0);	
+	lk->hold = 0;
+	lk->tid = -1;
+	return 0;
+}
+
+int sthreads_lock (lock * lk){
+
+	set_timer(TIMER_TYPE, timer_handler, DISABLE, &curr->stopped_time);
+	if( lk->hold != 0 ){
+			// 기다릴 때는 waiting
+			curr->lock_wait = lk->lid;
+			curr->state = waiting;
+			return 0;
+			// 내 차례가 왔을 때 ready
+	}
+	int restore = (int) curr->stopped_time.it_value.tv_usec / 1000;
+	set_timer(TIMER_TYPE, timer_handler, restore, 0x0);
+	curr->lock_wait = -1;
+	lk->hold = 1;
+	lk->tid = curr->tid;
+	curr_for_lock = curr;		
+	return 0;
+}
+
+int lock_init ( lock * new ){
+	
+	new->tid = -1;
+	new->hold = 0;
+	new->lid = lid_s++;
+	return 0;
+
+}
 
 int timer_signal(int timer_type){
 
@@ -59,15 +116,14 @@ int timer_signal(int timer_type){
 			sig = SIGPROF;
 			break;
 		default:
-			fprintf(stderr, "ERROR: unknown timer type %d!\n", timer_type);
+			fprintf(stderr, "ERROR: uNknown timer type %d!\n", timer_type);
 			exit(EXIT_FAILURE);
 	}
 
 	return sig;
 }
 
-
-void set_timer (int type, void (* handler) (int), int ms)
+void set_timer (int type, void (* handler) (int), int ms, struct itimerval * old )
 {
 	struct itimerval timer;
 	struct sigaction sa;
@@ -77,20 +133,20 @@ void set_timer (int type, void (* handler) (int), int ms)
 	sigaction(timer_signal(type), &sa, 0x0);
 
 	timer.it_value.tv_sec = 0;
-	timer.it_value.tv_usec = ms * 1000;
+	timer.it_value.tv_usec = ms * 100;
 	timer.it_interval.tv_sec = 0;
 	timer.it_interval.tv_usec = 0;
 
-	if( setitimer (type, &timer, 0x0) < 0 ){
+	if( setitimer (type, &timer, old) < 0 ){
 		perror("Setting timer");
 		exit(EXIT_FAILURE);
 	}
-
+	return ;
 }
 
 void timer_handler (int signum){
-	static int count = 0;
-	fprintf(stderr, "=======> timer( %03d ) curr_tid : %d\n", count++, curr->tid);
+	//static int count = 0;
+	//fprintf(stderr, "=======> timer( %03d ) curr_tid : %d\n", count++, curr->tid);
 	yield();
 }
 
@@ -131,7 +187,7 @@ int insert_t_queue(thread_t * new){
 	for( ; i->next != 0x0 ; i = i->next ) ;
 	i->next = new;
 	t_queue->thread_n++;
-	return 0;;
+	return 0;
 }
 
 int delete_t_queue(tid_t term_tid){
@@ -173,26 +229,23 @@ int delete_t_queue(tid_t term_tid){
 
 }
 
-
 void scheduler(){
 
-	
 	while(1){
 		
+
 		thread_t * i = curr->next;
 		for( ; i != 0x0 ; i = i->next ){
 			if(i->state != ready)
 				continue;
 			curr = i;
 			curr->state = running;	
-			set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
+			set_timer(TIMER_TYPE, timer_handler, TIMEOUT, 0x0);
 			sched->state = ready;
-			puts(" swapcontext(&sched->ctx,&curr->ctx) in sched before\n");
 			if( swapcontext(&sched->ctx,&curr->ctx) < 0 ){
 				perror("swapcontext");
 				exit(EXIT_FAILURE);
 			}
-			return ;
 		}
 
 		for( i = t_queue->first_t ; i != curr->next ; i = i->next ){
@@ -200,14 +253,12 @@ void scheduler(){
 				continue;
 			curr = i;
 			curr->state = running;
-			set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
+			set_timer(TIMER_TYPE, timer_handler, TIMEOUT, 0x0);
 			sched->state = ready;
-			puts(" swapcontext(&sched->ctx,&curr->ctx) in sched after\n");
 			if( swapcontext(&sched->ctx,&curr->ctx) < 0 ){
 				perror("swapcontext");
 				exit(EXIT_FAILURE);
 			}
-			return;
 		}
 	}
 
@@ -234,7 +285,9 @@ int init(){
 	sched->state = ready;
 	init_context_0(&sched->ctx, scheduler, 0);
 	sched->next = 0x0;
-	sched->tid = tid_s++;
+	sched->tid = tid_s++;	
+		
+
 	
 	curr = (thread_t *) malloc (sizeof(thread_t));
 	curr->state = running;
@@ -242,15 +295,23 @@ int init(){
 	curr->next = 0x0;
      	curr->tid = tid_s++;
 
+	curr->stopped_time.it_value.tv_sec = 0;
+	curr->stopped_time.it_value.tv_usec = 0;
+	curr->stopped_time.it_interval.tv_sec = 0;
+	curr->stopped_time.it_interval.tv_usec = 0;
+
+	curr->lock_wait = -1;
+
 	if( insert_t_queue(curr) < 0 ){
 		perror("insert t_queue");
 		return -1;
 	}
 
-	set_timer(TIMER_TYPE, timer_handler, TIMEOUT);
+	lid_s = 0;
+	set_timer(TIMER_TYPE, timer_handler, TIMEOUT, 0x0);
 	return curr->tid;
-}
 
+}
 
 tid_t spawn(void (* start)()){
 
@@ -259,7 +320,13 @@ tid_t spawn(void (* start)()){
 	init_context_0(&new->ctx, start, 0);
 	new->next = 0x0;
 	new->tid = tid_s++;
-
+	
+	new->stopped_time.it_value.tv_sec = 0;
+	new->stopped_time.it_value.tv_usec = 0;
+	new->stopped_time.it_interval.tv_sec = 0;
+	new->stopped_time.it_interval.tv_usec = 0;
+	
+	new->lock_wait = -1;
 	if ( insert_t_queue(new) < 0){
 		perror("insert t_queue");
 		return -1;
@@ -270,21 +337,20 @@ tid_t spawn(void (* start)()){
 
 void yield(){
 
-	set_timer(TIMER_TYPE, timer_handler, DISABLE);
+	set_timer(TIMER_TYPE, timer_handler, DISABLE, 0x0);
 	if(curr->state != running){
 		perror("yield : curr->state != running");
 		exit(EXIT_FAILURE);
 	}
 	curr->state = ready;
 	sched->state = running;
-	puts("swapcontext(&curr->ctx, &sched->ctx); in yield\n");
 	swapcontext(&curr->ctx, &sched->ctx);
 		
 }
 
 void done(){
 	
-	set_timer(TIMER_TYPE, timer_handler, DISABLE);
+	set_timer(TIMER_TYPE, timer_handler, DISABLE, 0x0);
 	if(curr->state != running){
 		perror("done : curr->state != running");
 		exit(EXIT_FAILURE);
@@ -293,19 +359,21 @@ void done(){
 	curr->state = terminated;
 	thread_t * i = t_queue->first_t;
 	for( ; i != 0x0 ; i = i->next ){
-		if( i->state == waiting ){
+		if( i->state == waiting && i->lock_wait == -1 ){
 			i->state = ready;
 		}
 	}
 	sched->state = running;
-	puts("swapcontext(&curr->ctx, &sched->ctx); in done\n");
-	swapcontext(&curr->ctx, &sched->ctx);
+	if( swapcontext(&curr->ctx, &sched->ctx) < 0 ){
+		perror("swapcontext curr->sched");
+		exit(EXIT_FAILURE);
+	}
 }
 
 
 tid_t join() {
 	
-	set_timer(TIMER_TYPE, timer_handler, DISABLE);
+	set_timer(TIMER_TYPE, timer_handler, DISABLE, 0x0);
 	if(curr->state != running && curr->tid != 0){
 		perror("join : curr->state != running");
 		exit(EXIT_FAILURE);
@@ -313,18 +381,20 @@ tid_t join() {
 
 	curr->state = waiting;
 	sched->state = ready;
-	puts("swapcontext(&curr->ctx, &sched->ctx); in join\n");
-	swapcontext(&curr->ctx, &sched->ctx);
+	if( swapcontext(&curr->ctx, &sched->ctx) < 0 ){
+		perror("swapcontext curr->sched");
+		exit(EXIT_FAILURE);
+	}
 
 	thread_t * i = t_queue->first_t;
+	tid_t term_tid ;
 	for( ; i != 0x0 ; i = i->next ){
 		if( i->state == terminated ){
-			tid_t term_tid = i->tid;
+			term_tid = i->tid;
 			i = t_queue->first_t;
 			delete_t_queue(term_tid);
-			return term_tid;
 		}
 	}
 
-	return -1;
+	return term_tid;
 }
